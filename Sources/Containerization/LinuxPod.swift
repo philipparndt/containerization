@@ -1121,6 +1121,22 @@ extension LinuxPod {
         }
     }
 
+    /// Pause the pod's VM.
+    public func pause() async throws {
+        try await self.state.withLock { state in
+            let createdState = try state.phase.createdState("pause")
+            try await createdState.vm.pause()
+        }
+    }
+
+    /// Resume the pod's VM.
+    public func resume() async throws {
+        try await self.state.withLock { state in
+            let createdState = try state.phase.createdState("resume")
+            try await createdState.vm.resume()
+        }
+    }
+
     /// Send a signal to a container.
     public func killContainer(_ containerID: String, signal: Signal) async throws {
         try await self.state.withLock { state in

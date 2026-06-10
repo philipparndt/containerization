@@ -235,20 +235,34 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
         }
     }
 
-    // NOTE: Investigate what is the "right" way to handle already vended vsock
-    // connections for pause and resume.
+    // Vsock connections do not survive a pause of the virtual machine:
+    // resuming with previously vended connections produces EBADF on their
+    // file descriptors. Connections owned by the instance (the time
+    // synchronization agent connection) are therefore closed before the
+    // pause and re-established after the resume. Callers are responsible
+    // for connections they obtained via `dialAgent()`.
 
     public func pause() async throws {
         try await lock.withLock { _ in
-            await self.timeSyncer.pause()
+            guard self.state == .running else {
+                throw ContainerizationError(.invalidState, message: "vm is not running")
+            }
+            try await self.timeSyncer.close()
             try await self.vm.pause(queue: self.queue)
         }
     }
 
     public func resume() async throws {
         try await lock.withLock { _ in
+            guard self.state == .paused else {
+                throw ContainerizationError(.invalidState, message: "vm is not paused")
+            }
             try await self.vm.resume(queue: self.queue)
-            await self.timeSyncer.resume()
+            let agent = try await Vminitd(
+                connection: try await self.vm.connect(queue: self.queue, port: Vminitd.port),
+                group: self.group
+            )
+            await self.timeSyncer.start(context: agent)
         }
     }
 
@@ -354,6 +368,8 @@ extension VZVirtualMachineInstance {
                 state = .starting
             case .running:
                 state = .running
+            case .paused:
+                state = .paused
             case .stopping:
                 state = .stopping
             case .stopped:

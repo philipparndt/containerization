@@ -21,6 +21,7 @@ import Foundation
 public enum VirtualMachineInstanceState: Sendable {
     case starting
     case running
+    case paused
     case stopped
     case stopping
     case unknown
