@@ -86,6 +86,9 @@ public final class LinuxContainer: Container, Sendable {
         /// A stable platform machine identifier (data representation),
         /// required for restoring suspended containers.
         public var machineIdentifier: Data? = nil
+        /// Attach a virtio memory balloon device (host memory reclaim).
+        /// Must match the device set of a suspended machine state on restore.
+        public var memoryBalloon: Bool = true
         /// Optional destination for serial boot logs.
         public var bootLog: BootLog?
         /// EXPERIMENTAL: Path in the root filesystem for the virtual
@@ -639,7 +642,8 @@ extension LinuxContainer {
                 mountsByID: [self.id: containerMounts],
                 bootLog: self.config.bootLog,
                 nestedVirtualization: self.config.virtualization,
-                machineIdentifier: self.config.machineIdentifier
+                machineIdentifier: self.config.machineIdentifier,
+                memoryBalloon: self.config.memoryBalloon
             )
             let creationConfig = StandardVMConfig(configuration: vmConfig)
             let vm = try await self.vmm.create(config: creationConfig)
@@ -1005,7 +1009,8 @@ extension LinuxContainer {
                 mountsByID: [self.id: containerMounts],
                 bootLog: self.config.bootLog,
                 nestedVirtualization: self.config.virtualization,
-                machineIdentifier: self.config.machineIdentifier
+                machineIdentifier: self.config.machineIdentifier,
+                memoryBalloon: self.config.memoryBalloon
             )
             let creationConfig = StandardVMConfig(configuration: vmConfig)
             let vm = try await self.vmm.create(config: creationConfig)
@@ -1046,6 +1051,16 @@ extension LinuxContainer {
                 state.setErrored(error: error)
                 throw error
             }
+        }
+    }
+
+    /// Set the memory balloon's target size for the container's virtual
+    /// machine. Lowering the target lets the host reclaim memory the guest
+    /// no longer uses; the configured memory size restores normal operation.
+    public func setTargetMemory(bytes: UInt64) async throws {
+        try await self.state.withLock { state in
+            let startedState = try state.startedState("setTargetMemory")
+            try await startedState.vm.setTargetMemory(bytes: bytes)
         }
     }
 

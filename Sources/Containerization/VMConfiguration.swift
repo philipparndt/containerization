@@ -84,6 +84,10 @@ public struct VMConfiguration: Sendable {
     /// for restoring suspended virtual machines, whose saved state is bound
     /// to the identifier; a random identifier is generated when nil.
     public var machineIdentifier: Data?
+    /// Attach a virtio memory balloon device, letting the host reclaim
+    /// memory the guest no longer uses. Must match the device set of a
+    /// suspended machine state when restoring.
+    public var memoryBalloon: Bool
     /// Extension objects that participate in the VM instance lifecycle.
     /// Extension packages append their types here; VZ-aware extensions
     /// should conform to ``VZInstanceExtension``.
@@ -96,7 +100,8 @@ public struct VMConfiguration: Sendable {
         mountsByID: [String: [Mount]] = [:],
         bootLog: BootLog? = nil,
         nestedVirtualization: Bool = false,
-        machineIdentifier: Data? = nil
+        machineIdentifier: Data? = nil,
+        memoryBalloon: Bool = true
     ) {
         self.cpus = cpus
         self.memoryInBytes = memoryInBytes
@@ -105,5 +110,6 @@ public struct VMConfiguration: Sendable {
         self.bootLog = bootLog
         self.nestedVirtualization = nestedVirtualization
         self.machineIdentifier = machineIdentifier
+        self.memoryBalloon = memoryBalloon
     }
 }

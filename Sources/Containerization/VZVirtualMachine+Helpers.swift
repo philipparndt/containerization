@@ -147,6 +147,18 @@ extension VZVirtualMachine {
             }
         }
     }
+
+    /// Set the virtio balloon's target memory size. Lowering the target
+    /// inflates the balloon in the guest, returning free pages to the host;
+    /// raising it back deflates the balloon.
+    func setTargetMemory(queue: DispatchQueue, bytes: UInt64) throws {
+        try queue.sync {
+            guard let balloon = self.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice else {
+                throw ContainerizationError(.unsupported, message: "virtual machine has no memory balloon device")
+            }
+            balloon.targetVirtualMachineMemorySize = bytes
+        }
+    }
 }
 
 extension VZVirtualMachine {

@@ -78,6 +78,7 @@ public struct VZVirtualMachineManager: VirtualMachineManager {
 
                 instanceConfig.mountsByID = vmConfig.mountsByID
                 instanceConfig.machineIdentifier = vmConfig.machineIdentifier
+                instanceConfig.memoryBalloon = vmConfig.memoryBalloon
                 instanceConfig.extensions = vmConfig.extensions
             })
     }

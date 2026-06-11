@@ -86,6 +86,8 @@ public final class VZVirtualMachineInstance: Sendable {
         /// A stable platform machine identifier (data representation),
         /// required for restoring suspended virtual machines.
         public var machineIdentifier: Data?
+        /// Attach a virtio memory balloon device (host memory reclaim).
+        public var memoryBalloon: Bool = true
         /// Extension objects that participate in the VM instance lifecycle.
         public var extensions: [any Sendable] = []
 
@@ -321,6 +323,18 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
         }
     }
 
+    /// Set the virtio balloon's target memory size. Lowering the target
+    /// lets the host reclaim memory the guest no longer uses; the
+    /// configured memory size restores normal operation.
+    public func setTargetMemory(bytes: UInt64) async throws {
+        try await lock.withLock { _ in
+            guard self.state == .running else {
+                throw ContainerizationError(.invalidState, message: "vm is not running")
+            }
+            try self.vm.setTargetMemory(queue: self.queue, bytes: bytes)
+        }
+    }
+
     public func dialAgent() async throws -> Vminitd {
         try await lock.withLock { _ in
             do {
@@ -489,6 +503,12 @@ extension VZVirtualMachineInstance.Configuration {
         config.memorySize = (self.memoryInBytes + mib - 1) & ~(mib - 1)
         config.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
         config.socketDevices = [VZVirtioSocketDeviceConfiguration()]
+        if self.memoryBalloon {
+            // A traditional virtio balloon lets the host reclaim memory the
+            // guest no longer uses (see setTargetMemory). Conditional: the
+            // device set must match a suspended machine state on restore.
+            config.memoryBalloonDevices = [VZVirtioTraditionalMemoryBalloonDeviceConfiguration()]
+        }
 
         if let bootLog = self.bootLog {
             config.serialPorts = try serialPort(destination: bootLog)
