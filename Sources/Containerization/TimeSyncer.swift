@@ -35,12 +35,21 @@ actor TimeSyncer {
 
         self.context = context
         self.task = Task {
+            // Sync once immediately. On a restore-from-disk the guest wakes up
+            // with a wall clock frozen at suspend time; correcting it at once
+            // (rather than after the first interval) keeps that skew from
+            // reaching time-sensitive workloads like etcd/k3s leases.
+            var first = true
             while true {
                 do {
-                    do {
-                        try await Task.sleep(for: interval)
-                    } catch {
-                        return
+                    if first {
+                        first = false
+                    } else {
+                        do {
+                            try await Task.sleep(for: interval)
+                        } catch {
+                            return
+                        }
                     }
 
                     guard !paused else {

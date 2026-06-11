@@ -287,7 +287,19 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
             }
             try await self.timeSyncer.close()
             try await self.vm.pause(queue: self.queue)
-            try await self.vm.saveMachineState(queue: self.queue, to: url)
+            do {
+                try await self.vm.saveMachineState(queue: self.queue, to: url)
+            } catch {
+                // Unwind to a running machine when the state cannot be
+                // saved, re-establishing the agent connection.
+                try? await self.vm.resume(queue: self.queue)
+                if let conn = try? await self.vm.connect(queue: self.queue, port: Vminitd.port),
+                    let agent = try? await Vminitd(connection: conn.dupHandle(), group: self.group)
+                {
+                    await self.timeSyncer.start(context: agent)
+                }
+                throw error
+            }
             try await self.vm.stop(queue: self.queue)
         }
     }

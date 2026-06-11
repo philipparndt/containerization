@@ -33,6 +33,11 @@ final class IOPair: Sendable {
         let buffer: UnsafeMutableBufferPointer<UInt8>
         var closed: Bool
         var registeredFd: Int32?
+        // Set when the destination (host) side of the relay has gone away,
+        // e.g. after a suspend-to-disk closed the host endpoint. The reader
+        // (the container's stdio pipe) is kept open and drained so the
+        // workload never receives EPIPE/SIGPIPE and survives a restore.
+        var writerDead: Bool = false
 
         func drain() {
             let readFrom = OSFile(fd: from.fileDescriptor)
@@ -142,7 +147,7 @@ final class IOPair: Sendable {
                 // Loop so we drain fully.
                 while true {
                     let r = readFrom.read(io.buffer)
-                    if r.read > 0 {
+                    if r.read > 0 && !io.writerDead {
                         let view = UnsafeMutableBufferPointer(
                             start: io.buffer.baseAddress,
                             count: r.read
@@ -150,9 +155,16 @@ final class IOPair: Sendable {
 
                         let w = writeTo.write(view)
                         if w.wrote != r.read {
-                            self.logger?.error("stopping relay: short write for stdio")
-                            io.close(logger: self.logger)
-                            return
+                            // The host side of the relay went away (e.g. the
+                            // container was suspended to disk and the host
+                            // endpoint closed). Do NOT close the container's
+                            // stdio pipe — that delivers EPIPE/SIGPIPE to the
+                            // workload and kills it across a suspend/restore.
+                            // Detach the writer and keep draining the reader so
+                            // the process runs unimpeded; its output is dropped
+                            // until a relay is re-established.
+                            self.logger?.error("relay writer gone for \(self.reason); detaching and draining")
+                            io.writerDead = true
                         }
                     }
 
