@@ -135,7 +135,17 @@ public final class VZVirtualMachineInstance: Sendable {
         self._mounts = Mutex(mountAttachments)
 
         self.vm = VZVirtualMachine(
-            configuration: try config.toVZ(allocator: allocator),
+            configuration: try {
+                let vzConfig = try config.toVZ(allocator: allocator)
+                // Probe for suspend-to-disk viability (PoC diagnostics).
+                do {
+                    try vzConfig.validateSaveRestoreSupport()
+                    logger?.info("vz configuration supports save/restore")
+                } catch {
+                    logger?.info("vz configuration does NOT support save/restore: \(error)")
+                }
+                return vzConfig
+            }(),
             queue: self.queue
         )
 
@@ -258,10 +268,8 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
                 throw ContainerizationError(.invalidState, message: "vm is not paused")
             }
             try await self.vm.resume(queue: self.queue)
-            let agent = try await Vminitd(
-                connection: try await self.vm.connect(queue: self.queue, port: Vminitd.port),
-                group: self.group
-            )
+            let conn = try await self.vm.connect(queue: self.queue, port: Vminitd.port)
+            let agent = try await Vminitd(connection: try conn.dupHandle(), group: self.group)
             await self.timeSyncer.start(context: agent)
         }
     }
