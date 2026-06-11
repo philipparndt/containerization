@@ -83,6 +83,9 @@ public final class LinuxContainer: Container, Sendable {
         public var hosts: Hosts?
         /// Enable nested virtualization support.
         public var virtualization: Bool = false
+        /// A stable platform machine identifier (data representation),
+        /// required for restoring suspended containers.
+        public var machineIdentifier: Data? = nil
         /// Optional destination for serial boot logs.
         public var bootLog: BootLog?
         /// EXPERIMENTAL: Path in the root filesystem for the virtual
@@ -635,7 +638,8 @@ extension LinuxContainer {
                 interfaces: self.interfaces,
                 mountsByID: [self.id: containerMounts],
                 bootLog: self.config.bootLog,
-                nestedVirtualization: self.config.virtualization
+                nestedVirtualization: self.config.virtualization,
+                machineIdentifier: self.config.machineIdentifier
             )
             let creationConfig = StandardVMConfig(configuration: vmConfig)
             let vm = try await self.vmm.create(config: creationConfig)
@@ -954,6 +958,93 @@ extension LinuxContainer {
                 let finalError = firstError ?? error
                 state.setErrored(error: finalError)
                 throw finalError
+            }
+        }
+    }
+
+    /// Suspend the container: save the virtual machine's complete state to
+    /// disk and stop it, releasing CPU and memory. The container can be
+    /// continued with `restore(from:)` on a freshly initialized instance
+    /// with an identical configuration, also across host reboots.
+    ///
+    /// Host-side unix socket relays and standard I/O streams do not survive
+    /// a suspend; output written after a restore is not relayed.
+    public func suspend(to url: URL) async throws {
+        try await self.state.withLock { state in
+            let startedState = try state.startedState("suspend")
+            try? await startedState.relayManager.stopAll()
+            try await startedState.vm.suspend(to: url)
+            state = .stopped
+        }
+    }
+
+    /// Restore a container that was suspended with `suspend(to:)`. The
+    /// instance must be freshly initialized with a configuration identical
+    /// to the suspended container, including its network interfaces.
+    public func restore(from url: URL) async throws {
+        try await self.state.withLock { state in
+            try state.validateForCreate()
+
+            var modifiedRootfs = self.rootfs
+            modifiedRootfs.options.removeAll(where: { $0 == "ro" })
+
+            let vmMemory = self.memoryInBytes + self.config.memoryOverhead
+            let vmCpus = self.cpus + self.config.cpuOverhead
+
+            let fileMountContext = try FileMountContext.prepare(mounts: self.config.mounts)
+
+            var containerMounts = [modifiedRootfs] + fileMountContext.transformedMounts
+            if let writableLayer = self.writableLayer {
+                containerMounts.insert(writableLayer, at: 1)
+            }
+
+            let vmConfig = VMConfiguration(
+                cpus: vmCpus,
+                memoryInBytes: vmMemory,
+                interfaces: self.interfaces,
+                mountsByID: [self.id: containerMounts],
+                bootLog: self.config.bootLog,
+                nestedVirtualization: self.config.virtualization,
+                machineIdentifier: self.config.machineIdentifier
+            )
+            let creationConfig = StandardVMConfig(configuration: vmConfig)
+            let vm = try await self.vmm.create(config: creationConfig)
+            let relayManager = UnixSocketRelayManager(vm: vm, log: self.logger)
+
+            try await vm.restore(from: url)
+
+            do {
+                // The guest, including the init process and all of its
+                // children, resumes exactly where it was suspended; only a
+                // host-side handle for the existing init process is created.
+                let agent = try await vm.dialAgent()
+                let spec = self.generateRuntimeSpec()
+                let stdio = IOUtil.setup(
+                    portAllocator: self.hostVsockPorts,
+                    stdin: nil,
+                    stdout: nil,
+                    stderr: nil
+                )
+                let process = LinuxProcess(
+                    self.id,
+                    containerID: self.id,
+                    spec: spec,
+                    io: stdio,
+                    ociRuntimePath: self.config.ociRuntimePath,
+                    agent: agent,
+                    vm: vm,
+                    logger: self.logger
+                )
+                let createdState = State.CreatedState(
+                    vm: vm,
+                    relayManager: relayManager,
+                    fileMountContext: fileMountContext
+                )
+                state = .started(.init(createdState, process: process))
+            } catch {
+                try? await vm.stop()
+                state.setErrored(error: error)
+                throw error
             }
         }
     }

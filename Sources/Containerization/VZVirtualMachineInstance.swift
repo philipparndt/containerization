@@ -83,6 +83,9 @@ public final class VZVirtualMachineInstance: Sendable {
         public var initialFilesystem: Mount?
         /// Destination for the virtual machine's boot logs.
         public var bootLog: BootLog?
+        /// A stable platform machine identifier (data representation),
+        /// required for restoring suspended virtual machines.
+        public var machineIdentifier: Data?
         /// Extension objects that participate in the VM instance lifecycle.
         public var extensions: [any Sendable] = []
 
@@ -267,6 +270,38 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
             guard self.state == .paused else {
                 throw ContainerizationError(.invalidState, message: "vm is not paused")
             }
+            try await self.vm.resume(queue: self.queue)
+            let conn = try await self.vm.connect(queue: self.queue, port: Vminitd.port)
+            let agent = try await Vminitd(connection: try conn.dupHandle(), group: self.group)
+            await self.timeSyncer.start(context: agent)
+        }
+    }
+
+    /// Suspend the virtual machine: pause it, save its complete state to
+    /// disk, and stop it, releasing CPU and memory. The saved state can be
+    /// continued with `restore(from:)`, also across host reboots.
+    public func suspend(to url: URL) async throws {
+        try await lock.withLock { _ in
+            guard self.state == .running else {
+                throw ContainerizationError(.invalidState, message: "vm is not running")
+            }
+            try await self.timeSyncer.close()
+            try await self.vm.pause(queue: self.queue)
+            try await self.vm.saveMachineState(queue: self.queue, to: url)
+            try await self.vm.stop(queue: self.queue)
+        }
+    }
+
+    /// Restore a virtual machine previously suspended with `suspend(to:)`.
+    /// The receiver must have been created with a configuration identical
+    /// to the suspended instance and must not have been started.
+    public func restore(from url: URL) async throws {
+        try await lock.withLock { _ in
+            guard self.state == .stopped else {
+                throw ContainerizationError(.invalidState, message: "vm is not stopped")
+            }
+            try await self.prestart()
+            try await self.vm.restoreMachineState(queue: self.queue, from: url)
             try await self.vm.resume(queue: self.queue)
             let conn = try await self.vm.connect(queue: self.queue, port: Vminitd.port)
             let agent = try await Vminitd(connection: try conn.dupHandle(), group: self.group)
@@ -548,6 +583,12 @@ extension VZVirtualMachineInstance.Configuration {
             )
         }
         platform.isNestedVirtualizationEnabled = self.nestedVirtualization
+        if let identifierData = self.machineIdentifier {
+            guard let identifier = VZGenericMachineIdentifier(dataRepresentation: identifierData) else {
+                throw ContainerizationError(.invalidArgument, message: "invalid machine identifier")
+            }
+            platform.machineIdentifier = identifier
+        }
         config.platform = platform
 
         for ext in self.extensions.compactMap({ $0 as? any VZInstanceExtension }) {

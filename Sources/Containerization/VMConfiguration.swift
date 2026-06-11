@@ -80,6 +80,10 @@ public struct VMConfiguration: Sendable {
     /// Enable nested virtualization support. If the VirtualMachineManager
     /// does not support this feature, it MUST return an .unsupported ContainerizationError.
     public var nestedVirtualization: Bool
+    /// A stable platform machine identifier (data representation). Required
+    /// for restoring suspended virtual machines, whose saved state is bound
+    /// to the identifier; a random identifier is generated when nil.
+    public var machineIdentifier: Data?
     /// Extension objects that participate in the VM instance lifecycle.
     /// Extension packages append their types here; VZ-aware extensions
     /// should conform to ``VZInstanceExtension``.
@@ -91,7 +95,8 @@ public struct VMConfiguration: Sendable {
         interfaces: [any Interface] = [],
         mountsByID: [String: [Mount]] = [:],
         bootLog: BootLog? = nil,
-        nestedVirtualization: Bool = false
+        nestedVirtualization: Bool = false,
+        machineIdentifier: Data? = nil
     ) {
         self.cpus = cpus
         self.memoryInBytes = memoryInBytes
@@ -99,5 +104,6 @@ public struct VMConfiguration: Sendable {
         self.mountsByID = mountsByID
         self.bootLog = bootLog
         self.nestedVirtualization = nestedVirtualization
+        self.machineIdentifier = machineIdentifier
     }
 }

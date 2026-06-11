@@ -65,6 +65,10 @@ public protocol VirtualMachineInstance: Sendable {
     func pause() async throws
     /// Resume the virtual machine.
     func resume() async throws
+    /// Suspend the virtual machine: save its complete state to disk and stop it.
+    func suspend(to url: URL) async throws
+    /// Restore a virtual machine previously suspended to disk and continue it.
+    func restore(from url: URL) async throws
 
     /// Hotplug a block device, returning the attached filesystem info.
     /// Throws if the VMM does not support hotplug or not available
@@ -103,6 +107,12 @@ extension VirtualMachineInstance {
     }
     public func resume() async throws {
         throw ContainerizationError(.unsupported, message: "resume")
+    }
+    public func suspend(to url: URL) async throws {
+        throw ContainerizationError(.unsupported, message: "suspend")
+    }
+    public func restore(from url: URL) async throws {
+        throw ContainerizationError(.unsupported, message: "restore")
     }
     public func hotplug(_ block: Mount, id: String) async throws -> AttachedFilesystem {
         throw ContainerizationError(.unsupported, message: "hotplug not supported")
