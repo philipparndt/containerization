@@ -681,4 +681,24 @@ extension NATInterface: VZInterface {
     }
 }
 
+extension FileHandleInterface: VZInterface {
+    public func device() throws -> VZVirtioNetworkDeviceConfiguration {
+        let config = VZVirtioNetworkDeviceConfiguration()
+        if let macAddress = self.macAddress {
+            guard let mac = VZMACAddress(string: macAddress.description) else {
+                throw ContainerizationError(.invalidArgument, message: "invalid mac address \(macAddress)")
+            }
+            config.macAddress = mac
+        }
+        // The descriptor is a connected datagram socket whose peer is the
+        // userspace network stack; VZ exchanges ethernet frames over it. We do
+        // not own the descriptor's lifetime, so don't close it on dealloc.
+        let handle = FileHandle(fileDescriptor: self.fileDescriptor, closeOnDealloc: false)
+        let attachment = VZFileHandleNetworkDeviceAttachment(fileHandle: handle)
+        attachment.maximumTransmissionUnit = Int(self.mtu)
+        config.attachment = attachment
+        return config
+    }
+}
+
 #endif
