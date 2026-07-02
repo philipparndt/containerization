@@ -22,3 +22,19 @@ The build target is selected by the `TARGET_ARCH` make variable, which accepts e
 - `make x86_64` → convenience alias for `make TARGET_ARCH=x86_64`
 
 The `z` suffix on the x86 name follows Linux convention for a compressed kernel image. The resulting kernel is copied into the repo's `bin/` directory.
+
+## Prebuilt 16K kernel (`vmlinux-16k`)
+
+`vmlinux-16k` is a prebuilt arm64 kernel from `config-arm64` (the kata
+config extracted into `config-arm64-kata`, switched to 16K pages, plus
+balloon compaction and PSI). On Apple silicon the host manages memory in
+16K pages: with a 4K guest the hypervisor can free a ballooned host page
+only when all four covering guest pages are ballooned, so fragmented
+guests barely return memory. With 16K guest pages every ballooned page is
+freed. Trade-off: Rosetta cannot run on a 16K kernel, so amd64 container
+images do not work — use a 4K kernel for those workloads.
+
+It is committed so downstream bundlers (k3c) ship it from a pinned commit
+without needing a kernel build at bundle time (the build requires a
+running `container` runtime, which CI runners cannot provide). Rebuild
+with `make` in this directory and replace the file deliberately.
