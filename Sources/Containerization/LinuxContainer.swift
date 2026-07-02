@@ -1064,6 +1064,82 @@ extension LinuxContainer {
         }
     }
 
+    /// Read the guest kernel's memory state (whole-VM /proc/meminfo, not
+    /// cgroup statistics). This is the input for host-side memory balloon
+    /// sizing: with the balloon inflated, `availableBytes` reflects what the
+    /// workload can still allocate before the guest comes under pressure.
+    ///
+    /// The read reuses the agent's copy machinery over a dedicated vsock
+    /// connection, so it needs no process spawned in the guest and works with
+    /// any vminitd version that supports copy.
+    public func guestMemoryInfo() async throws -> GuestMemoryInfo {
+        let data = try await self.state.withLock { state -> Data in
+            let startedState = try state.startedState("guestMemoryInfo")
+            let port = self.hostVsockPorts.wrappingAdd(1, ordering: .relaxed).oldValue
+            let listener = try startedState.vm.listen(port)
+
+            return try await withThrowingTaskGroup(of: Data?.self) { group in
+                group.addTask {
+                    try await startedState.vm.withAgent { agent in
+                        guard let vminitd = agent as? Vminitd else {
+                            throw ContainerizationError(.unsupported, message: "guestMemoryInfo requires Vminitd agent")
+                        }
+                        try await vminitd.copy(
+                            direction: .copyOut,
+                            guestPath: URL(filePath: "/proc/meminfo"),
+                            vsockPort: port
+                        )
+                    }
+                    return nil
+                }
+
+                group.addTask {
+                    guard let conn = await listener.first(where: { _ in true }) else {
+                        throw ContainerizationError(.internalError, message: "guestMemoryInfo: vsock connection not established")
+                    }
+                    try listener.finish()
+
+                    return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, any Error>) in
+                        self.copyQueue.async {
+                            defer { conn.closeFile() }
+                            var data = Data()
+                            var buf = [UInt8](repeating: 0, count: 4096)
+                            while true {
+                                let n = read(conn.fileDescriptor, &buf, buf.count)
+                                if n == 0 { break }
+                                guard n > 0 else {
+                                    continuation.resume(
+                                        throwing: ContainerizationError(
+                                            .internalError,
+                                            message: "guestMemoryInfo: vsock read error: \(String(cString: strerror(errno)))"
+                                        ))
+                                    return
+                                }
+                                data.append(contentsOf: buf[0..<n])
+                            }
+                            continuation.resume(returning: data)
+                        }
+                    }
+                }
+
+                var result: Data?
+                for try await value in group {
+                    if let value { result = value }
+                }
+                guard let result else {
+                    throw ContainerizationError(.internalError, message: "guestMemoryInfo: no data received")
+                }
+                return result
+            }
+        }
+        guard let text = String(data: data, encoding: .utf8),
+            let info = GuestMemoryInfo(procMeminfo: text)
+        else {
+            throw ContainerizationError(.internalError, message: "guestMemoryInfo: unparsable /proc/meminfo")
+        }
+        return info
+    }
+
     /// Pause the container.
     public func pause() async throws {
         try await self.state.withLock { state in
