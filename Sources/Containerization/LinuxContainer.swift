@@ -1105,6 +1105,22 @@ extension LinuxContainer {
                             var data = Data()
                             var buf = [UInt8](repeating: 0, count: 4096)
                             while true {
+                                // A memory-starved guest can stall the reply
+                                // indefinitely; bound the wait so callers (the
+                                // balloon controller, status queries) degrade
+                                // instead of wedging on a dead connection.
+                                var pfd = pollfd(fd: conn.fileDescriptor, events: Int16(POLLIN), revents: 0)
+                                let ready = poll(&pfd, 1, 10_000)
+                                guard ready > 0 else {
+                                    continuation.resume(
+                                        throwing: ContainerizationError(
+                                            .internalError,
+                                            message: ready == 0
+                                                ? "guestMemoryInfo: timed out waiting for the guest"
+                                                : "guestMemoryInfo: poll error: \(String(cString: strerror(errno)))"
+                                        ))
+                                    return
+                                }
                                 let n = read(conn.fileDescriptor, &buf, buf.count)
                                 if n == 0 { break }
                                 guard n > 0 else {
