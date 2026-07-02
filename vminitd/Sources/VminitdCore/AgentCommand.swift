@@ -121,10 +121,15 @@ public struct AgentCommand: AsyncParsableCommand {
         try cgManager.create()
         try cgManager.toggleAllAvailableControllers(enable: true)
 
-        // Set memory.high threshold to 80 MiB
-        let high: UInt64 = 80 * 1024 * 1024
+        // The runtime's footprint grows roughly with the kernel page size
+        // (page-granular allocations, per-thread stacks): the 4K-tuned
+        // limits throttled vminitd into permanent reclaim churn on a 16K
+        // kernel, timing out the agent connection. Scale them.
+        let pageScale = UInt64(max(sysconf(Int32(_SC_PAGESIZE)), 4096)) / 4096
+        // Set memory.high threshold to 80 MiB (at 4K pages)
+        let high: UInt64 = 80 * 1024 * 1024 * pageScale
         // Set memory.low to 50 MiB to avoid reclaiming vminitd's memory
-        let low: UInt64 = 50 * 1024 * 1024
+        let low: UInt64 = 50 * 1024 * 1024 * pageScale
 
         try cgManager.setMemoryHigh(bytes: high)
         try cgManager.setMemoryLow(bytes: low)
